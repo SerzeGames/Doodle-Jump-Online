@@ -1,0 +1,919 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8"/>
+<title>Doodle Jump - Multijoueur</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden;background:#1a1a2e;display:flex;align-items:center;justify-content:center;font-family:'Segoe UI',system-ui,sans-serif}
+.wrap{position:relative;width:min(420px,100vw);height:min(720px,100vh);overflow:hidden;box-shadow:0 0 60px rgba(0,200,255,.15)}
+canvas{display:block;width:100%;height:100%;image-rendering:auto}
+.overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(0,0,0,.55);backdrop-filter:blur(8px);z-index:10;opacity:1;transition:opacity .4s}
+.overlay.hidden{opacity:0;pointer-events:none}
+.overlay h1{font-size:28px;color:#7fff7f;text-shadow:0 0 20px rgba(0,255,100,.4);margin-bottom:6px;letter-spacing:1px}
+.overlay .sub{color:#cde;font-size:14px;margin-bottom:18px;opacity:.8}
+.btn{background:linear-gradient(135deg,#00c853,#00e676);color:#1a1a2e;border:none;padding:12px 32px;border-radius:30px;font-size:16px;font-weight:700;cursor:pointer;letter-spacing:.5px;transition:transform .15s,box-shadow .15s;box-shadow:0 4px 20px rgba(0,200,100,.3)}
+.btn:hover{transform:scale(1.05);box-shadow:0 6px 30px rgba(0,200,100,.5)}
+.btn:active{transform:scale(.97)}
+.btn.blue{background:linear-gradient(135deg,#42a5f5,#1e88e5);box-shadow:0 4px 20px rgba(0,100,200,.3)}
+.btn.red{background:linear-gradient(135deg,#ef5350,#e53935);box-shadow:0 4px 20px rgba(200,50,50,.3)}
+.hud{position:absolute;top:12px;left:14px;z-index:5;color:#fff;font-size:18px;font-weight:700;text-shadow:0 2px 8px rgba(0,0,0,.5);pointer-events:none}
+.hud-right{position:absolute;top:12px;right:14px;z-index:5;color:rgba(255,255,255,.6);font-size:14px;font-weight:700;text-shadow:0 2px 8px rgba(0,0,0,.5);pointer-events:none}
+.controls-hint{position:absolute;bottom:10px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,.35);font-size:11px;z-index:5;pointer-events:none}
+input[type=text]{padding:10px 16px;border:2px solid #555;border-radius:20px;font-size:16px;text-align:center;background:rgba(255,255,255,.1);color:#fff;outline:none;width:220px;margin-bottom:8px}
+input[type=text]::placeholder{color:rgba(255,255,255,.4)}
+.lobby-status{color:#7fe;font-size:14px;margin:10px 0;min-height:20px}
+.back-btn{position:absolute;top:12px;left:12px;z-index:20;background:rgba(0,0,0,.4);color:#fff;border:none;padding:6px 14px;border-radius:15px;font-size:13px;cursor:pointer}
+/* Result screen styles */
+.result-title{font-size:36px;font-weight:900;margin-bottom:20px;text-shadow:0 0 20px rgba(0,0,0,.3)}
+.result-title.win{color:#4caf50}
+.result-title.lose{color:#ef5350}
+.result-scores{display:flex;align-items:center;justify-content:center;gap:20px;margin:16px 0}
+.result-player{display:flex;flex-direction:column;align-items:center;gap:4px}
+.result-player img{width:50px;height:50px}
+.result-player .name{color:#fff;font-size:13px;font-weight:600}
+.result-player .pts{color:#cde;font-size:22px;font-weight:900}
+.result-vs{color:#fff;font-size:28px;font-weight:900}
+</style>
+</head>
+<body>
+<div class="wrap">
+<canvas id="c"></canvas>
+<div class="hud" id="hud">0</div>
+<div class="hud-right" id="hudRight"></div>
+<div class="controls-hint">← → ou A/D · Clic pour tirer</div>
+
+<!-- Lobby screen -->
+<div class="overlay" id="lobbyScreen">
+<h1>Multijoueur</h1>
+<div class="sub">Affronte un autre joueur en ligne !</div>
+<input type="text" id="pseudoInput" placeholder="Ton pseudo..." maxlength="16"/>
+<button class="btn" id="btnSearch">Recherche rapide</button>
+<div class="lobby-status" id="lobbyStatus"></div>
+<button class="btn blue" style="font-size:13px;padding:8px 20px;margin-top:8px" onclick="location.href='index.html'">← Menu</button>
+</div>
+
+<!-- Waiting / GetReady / Go overlays (image based) -->
+<div class="overlay hidden" id="waitingScreen" style="background:rgba(0,0,0,.7)">
+<img src="images/Waiting.webp" style="width:80%;max-width:350px" alt="Waiting"/>
+</div>
+<div class="overlay hidden" id="getReadyScreen" style="background:rgba(0,0,0,.7)">
+<img src="images/GetReady.webp" style="width:80%;max-width:350px" alt="Get Ready"/>
+</div>
+<div class="overlay hidden" id="goScreen" style="background:rgba(0,0,0,.4)">
+<img src="images/Go.webp" style="width:60%;max-width:250px" alt="Go!"/>
+</div>
+
+<!-- Result screen -->
+<div class="overlay hidden" id="resultScreen">
+<div class="result-title" id="resultTitle">Vous gagnez !</div>
+<div class="result-scores">
+  <div class="result-player">
+    <img src="images/Doodler_transparent.png" alt="Vous"/>
+    <div class="name" id="resultMyName">Moi</div>
+    <div class="pts" id="resultMyScore">0</div>
+  </div>
+  <div class="result-vs">:</div>
+  <div class="result-player">
+    <img src="images/Doodler_transparent.png" alt="Adversaire"/>
+    <div class="name" id="resultOpName">Adversaire</div>
+    <div class="pts" id="resultOpScore">0</div>
+  </div>
+</div>
+<button class="btn" id="btnPlayAgain" style="margin-top:16px">Continuer</button>
+<button class="btn blue" id="btnBackMenu" style="margin-top:8px;font-size:13px;padding:8px 20px">Menu</button>
+</div>
+
+</div>
+
+<script>
+// ══════════════════════════════════════════
+// ASSETS
+// ══════════════════════════════════════════
+const CHAR_SRC = "images/Doodler_transparent.png";
+const BG_SRC = "";
+const SND_JUMP = "son/jump.wav";
+const MONSTER_SRC = "images/Monster4.png";
+const SND_MONSTER = "son/soundmonsters.mp3";
+const SND_DEATH = "son/death.mp3";
+const SHOOT_SPRITE_SRC = "images/shoot.png";
+const SND_SHOOT1 = "son/shoot1.mp3";
+const SND_SHOOT2 = "son/shoot2.mp3";
+const SND_TRAP = "son/trap.mp3";
+const SND_TRAMPOLINE = "son/trampoline.mp3";
+const HOLE_SRC = "images/hole.png";
+const SND_HOLE = "son/hole.mp3";
+
+// ══════════════════════════════════════════
+// DOM
+// ══════════════════════════════════════════
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const hud = document.getElementById('hud');
+const hudRight = document.getElementById('hudRight');
+const lobbyScreen = document.getElementById('lobbyScreen');
+const waitingScreen = document.getElementById('waitingScreen');
+const getReadyScreen = document.getElementById('getReadyScreen');
+const goScreen = document.getElementById('goScreen');
+const resultScreen = document.getElementById('resultScreen');
+
+const W = 420, H = 720;
+canvas.width = W; canvas.height = H;
+
+// ══════════════════════════════════════════
+// LOAD IMAGES
+// ══════════════════════════════════════════
+const playerImg = new Image(); playerImg.src = CHAR_SRC;
+const monsterImg = new Image(); monsterImg.src = MONSTER_SRC;
+const shootImg = new Image(); shootImg.src = SHOOT_SPRITE_SRC;
+const bgImg = new Image(); bgImg.src = BG_SRC;
+const greenPlatImg = new Image(); greenPlatImg.src = "images/green_platform.png";
+const bluePlatImg = new Image(); bluePlatImg.src = "images/blue_platform.png";
+const trampolineImg = new Image(); trampolineImg.src = "images/trampoline.png";
+const holeImg = new Image(); holeImg.src = HOLE_SRC;
+
+// ══════════════════════════════════════════
+// AUDIO
+// ══════════════════════════════════════════
+let audioReady = false;
+let monsterAudio = null;
+function playSound(src, vol) { if(!audioReady) return; try { const a=new Audio(src);a.volume=vol;a.play(); } catch(e){} }
+function initAudio() { audioReady = true; }
+function playJump() { playSound(SND_JUMP, 0.35); }
+function playMonsterSound() { if(!audioReady||monsterAudio) return; try { monsterAudio=new Audio(SND_MONSTER);monsterAudio.volume=0.4;monsterAudio.loop=true;monsterAudio.play(); } catch(e){} }
+function stopMonsterSound() { if(monsterAudio){try{monsterAudio.pause();monsterAudio.currentTime=0;}catch(e){} monsterAudio=null;} }
+function playShootSound() { playSound(Math.random()<0.5?SND_SHOOT1:SND_SHOOT2, 0.3); }
+function playDeathSound() { playSound(SND_DEATH, 0.5); }
+function playTrapSound() { playSound(SND_TRAP, 0.6); }
+function playTrampolineSound() { playSound(SND_TRAMPOLINE, 0.5); }
+function playHoleSound() { playSound(SND_HOLE, 0.6); }
+
+// ══════════════════════════════════════════
+// SEEDED RANDOM (for synchronized world gen)
+// ══════════════════════════════════════════
+let seedState = 1;
+function seedRandom(s) { seedState = s; }
+function sRand() {
+  seedState = (seedState * 16807 + 0) % 2147483647;
+  return (seedState - 1) / 2147483646;
+}
+function sRandF(a,b) { return sRand()*(b-a)+a; }
+function sRandI(a,b) { return Math.floor(sRandF(a,b+1)); }
+// Non-seeded for local-only things (particles, etc.)
+function rand(a,b){ return Math.random()*(b-a)+a; }
+function randI(a,b){ return Math.floor(rand(a,b+1)); }
+
+// ══════════════════════════════════════════
+// CONSTANTS
+// ══════════════════════════════════════════
+const GRAVITY = 0.42;
+const JUMP_VEL = -12.5;
+const SUPER_JUMP = -19.5;
+const MOVE_SPEED = 5.5;
+const SCROLL_LINE = H * 0.38;
+const PLAT_COUNT = 14;
+const PLAT_W_MIN = 58, PLAT_W_MAX = 95;
+const PLAT_H = 14;
+const GAP_MIN = 38, GAP_MAX = 85;
+const PLAYER_W = 66, PLAYER_H = 66;
+const MONSTER_W = 85, MONSTER_H = 50;
+const MONSTER_START_SCORE = 1000;
+const MONSTER_INTERVAL_MAX = 800;
+const MONSTER_INTERVAL_MIN = 250;
+const MONSTER_RAMP_SCORE = 8000;
+const HOLE_W = 55, HOLE_H = 55;
+const TRAMPOLINE_INTERVAL_MIN = 1200;
+const TRAMPOLINE_INTERVAL_MAX = 1800;
+const TRAMPOLINE_JUMP = -22;
+const PT = { NORMAL:0, MOVING:1, FRAGILE:2, SPRING:3 };
+const PT_COLORS = {
+  [PT.NORMAL]:  { top:'#4caf50', body:'#388e3c', shine:'rgba(255,255,255,.25)' },
+  [PT.MOVING]:  { top:'#42a5f5', body:'#1e88e5', shine:'rgba(255,255,255,.2)' },
+  [PT.FRAGILE]: { top:'#ef9a9a', body:'#e57373', shine:'rgba(255,255,255,.15)' },
+  [PT.SPRING]:  { top:'#ffb74d', body:'#ff9800', shine:'rgba(255,255,255,.25)' },
+};
+
+// ══════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════
+let player, platforms, monsters, holes, score, cameraY, running, dead;
+let nextMonsterScore, nextTrampolineScore;
+let stunned = false, stunnedTime = 0;
+let suckedIn = false, suckedInTime = 0, suckedInHole = null;
+let projectiles = [], shooting = false, shootTimer = 0;
+let backflipAngle = 0, backflipping = false;
+let keys = { l:false, r:false };
+let particles = [];
+let screenShake = 0;
+let bgPattern = null;
+let lastTs = 0;
+
+// Multiplayer state
+let myPseudo = 'Joueur';
+let opPseudo = 'Adversaire';
+let peer = null, conn = null;
+let isHost = false;
+let gameSeed = 0;
+let opponentData = { x: W/2, y: H-140, w: PLAYER_W, h: PLAYER_H, facing:1, squash:1, score:0, cameraY:0, dead:false, shooting:false, backflipping:false, backflipAngle:0 };
+let matchActive = false;
+let opponentDead = false;
+let myDead = false;
+
+// Background pattern
+bgImg.onload = () => {
+  const pc = document.createElement('canvas');
+  pc.width = bgImg.naturalWidth; pc.height = bgImg.naturalHeight;
+  pc.getContext('2d').drawImage(bgImg, 0, 0);
+  bgPattern = ctx.createPattern(pc, 'repeat');
+};
+
+// ══════════════════════════════════════════
+// PLATFORM GENERATION (seeded)
+// ══════════════════════════════════════════
+function makePlatSeeded(x, y, type) {
+  const w = sRandI(PLAT_W_MIN, PLAT_W_MAX);
+  return {
+    x, y, w, h: PLAT_H, type,
+    vx: type===PT.MOVING ? sRandF(1,2.2)*(sRand()<0.5?-1:1) : 0,
+    broken: false, breakAnim: 0, springAnim: 0, hasTrampoline: false,
+  };
+}
+
+function init() {
+  player = { x:W/2-PLAYER_W/2, y:H-140, w:PLAYER_W, h:PLAYER_H, vx:0, vy:0, facing:1, squash:1 };
+  platforms=[]; particles=[]; monsters=[]; holes=[]; projectiles=[];
+  score=0; cameraY=0; dead=false;
+  suckedIn=false; suckedInTime=0; suckedInHole=null;
+  screenShake=0; nextMonsterScore=MONSTER_START_SCORE;
+  stunned=false; stunnedTime=0; shooting=false; shootTimer=0;
+  backflipAngle=0; backflipping=false;
+  nextTrampolineScore = sRandI(TRAMPOLINE_INTERVAL_MIN, TRAMPOLINE_INTERVAL_MAX);
+  stopMonsterSound();
+
+  // Seeded platform generation — identical for both players
+  let cy = H - 50;
+  platforms.push(makePlatSeeded(player.x - 20, player.y + player.h + 8, PT.NORMAL));
+  for(let i=0; i<PLAT_COUNT; i++){
+    const gap = sRandI(GAP_MIN, GAP_MAX);
+    cy -= gap;
+    const px = sRandI(10, W - PLAT_W_MAX - 10);
+    let type = PT.NORMAL;
+    if(i > 2) {
+      const r = sRand();
+      if(r < .08) type = PT.SPRING;
+      else if(r < .20) type = PT.FRAGILE;
+      else if(r < .35) type = PT.MOVING;
+    }
+    platforms.push(makePlatSeeded(px, cy, type));
+  }
+}
+
+// ══════════════════════════════════════════
+// UPDATE
+// ══════════════════════════════════════════
+function update(dt) {
+  if(dead) return;
+  const t = dt / 16.667;
+
+  if(suckedIn) {
+    suckedInTime += t;
+    const shrinkSpeed = 0.04;
+    player.w *= (1 - shrinkSpeed * t);
+    player.h *= (1 - shrinkSpeed * t);
+    if(suckedInHole) {
+      player.x += (suckedInHole.x+suckedInHole.w/2 - player.x-player.w/2)*0.15*t;
+      player.y += (suckedInHole.y+suckedInHole.h/2 - player.y-player.h/2)*0.15*t;
+    }
+    if(player.w < 3 || suckedInTime > 40) { onDeath(); }
+    return;
+  }
+
+  // Input
+  if(keys.l) { player.vx = -MOVE_SPEED; player.facing = -1; }
+  else if(keys.r) { player.vx = MOVE_SPEED; player.facing = 1; }
+  else player.vx *= 0.75;
+
+  player.x += player.vx * t;
+  if(player.x + player.w < 0) player.x = W;
+  if(player.x > W) player.x = -player.w;
+
+  player.vy += GRAVITY * t;
+  player.y += player.vy * t;
+
+  if(player.vy < -2) player.squash = Math.max(0.8, 1 + player.vy * 0.012);
+  else if(player.vy > 2) player.squash = Math.min(1.2, 1 + player.vy * 0.008);
+  else player.squash += (1 - player.squash) * 0.15;
+
+  if(backflipping) {
+    backflipAngle += 0.18 * t;
+    if(backflipAngle >= Math.PI * 2) { backflipAngle = 0; backflipping = false; }
+  }
+
+  // Scroll
+  if(player.y < SCROLL_LINE) {
+    const dy = SCROLL_LINE - player.y;
+    cameraY += dy;
+    player.y = SCROLL_LINE;
+    for(const p of platforms) p.y += dy;
+    for(const pr of particles) pr.y += dy;
+    for(const m of monsters) m.y += dy;
+    for(const h of holes) h.y += dy;
+    for(const pr of projectiles) pr.y += dy;
+    score += dy * 0.3;
+    hud.textContent = Math.floor(score);
+
+    // Spawn monster or hole (seeded)
+    if(score >= nextMonsterScore) {
+      if(sRand() < 0.5) {
+        const my = -MONSTER_H - sRandI(40, 120);
+        let mx = sRandI(30, W - MONSTER_W - 30);
+        monsters.push({ x:mx, y:my, w:MONSTER_W, h:MONSTER_H, alive:true, floatT:sRand()*Math.PI*2 });
+      } else {
+        const hy = -HOLE_H - sRandI(40, 120);
+        const hx = sRandI(30, W - HOLE_W - 30);
+        holes.push({ x:hx, y:hy, w:HOLE_W, h:HOLE_H });
+      }
+      const progress = Math.min((score - MONSTER_START_SCORE) / MONSTER_RAMP_SCORE, 1);
+      const interval = MONSTER_INTERVAL_MAX - (MONSTER_INTERVAL_MAX - MONSTER_INTERVAL_MIN) * progress;
+      nextMonsterScore += interval;
+    }
+    if(score >= nextTrampolineScore) {
+      const cands = platforms.filter(p => p.type === PT.NORMAL && !p.hasTrampoline && p.y < H*0.5);
+      if(cands.length > 0) cands[sRandI(0, cands.length-1)].hasTrampoline = true;
+      nextTrampolineScore += sRandI(TRAMPOLINE_INTERVAL_MIN, TRAMPOLINE_INTERVAL_MAX);
+    }
+  }
+
+  // Platform logic
+  for(const p of platforms) {
+    if(p.type === PT.MOVING && !p.broken) {
+      p.x += p.vx * t;
+      if(p.x < 5) { p.x=5; p.vx*=-1; }
+      if(p.x+p.w > W-5) { p.x=W-5-p.w; p.vx*=-1; }
+    }
+    if(p.broken) { p.breakAnim += 0.06*t; p.y += 4*t; }
+    if(p.springAnim > 0) p.springAnim -= 0.08*t;
+  }
+
+  // Stunned
+  if(stunned) {
+    stunnedTime += t;
+    player.vy += GRAVITY * 0.3 * t;
+    if(player.vy > 3) player.vy = 3;
+    player.y += player.vy * t;
+    if(player.y > H + 80) { playDeathSound(); onDeath(); }
+    for(let i=particles.length-1;i>=0;i--){const p=particles[i];p.x+=p.vx*t;p.y+=p.vy*t;p.vy+=0.15*t;p.life-=p.decay*t;if(p.life<=0)particles.splice(i,1);}
+    if(screenShake>0) screenShake*=0.85;
+    return;
+  }
+
+  // Landing
+  if(player.vy > 0) {
+    const feet = player.y + player.h;
+    for(const p of platforms) {
+      if(p.broken) continue;
+      const onX = (player.x+player.w-8 > p.x) && (player.x+8 < p.x+p.w);
+      const onY = feet >= p.y && feet <= p.y+p.h+player.vy*t+4;
+      if(onX && onY) {
+        if(p.type === PT.FRAGILE) {
+          p.broken=true; player.vy=JUMP_VEL*0.85;
+          spawnParticles(p.x+p.w/2,p.y,'#e57373',8); screenShake=4; playJump();
+        } else if(p.type === PT.SPRING) {
+          player.vy=SUPER_JUMP; p.springAnim=1;
+          spawnParticles(p.x+p.w/2,p.y,'#ffb74d',10); playJump();
+        } else {
+          if(p.hasTrampoline) {
+            player.vy=TRAMPOLINE_JUMP; backflipping=true; backflipAngle=0;
+            spawnParticles(p.x+p.w/2,p.y,'#ff5555',12); screenShake=5; playTrampolineSound();
+          } else {
+            player.vy=JUMP_VEL; spawnParticles(p.x+p.w/2,p.y,'#81c784',5); playJump();
+          }
+        }
+        player.y=p.y-player.h; player.squash=1.25; break;
+      }
+    }
+  }
+
+  // Projectiles
+  for(let i=projectiles.length-1;i>=0;i--){
+    const pr=projectiles[i]; pr.x+=pr.vx*t; pr.y+=pr.vy*t;
+    if(pr.y<-20||pr.x<-20||pr.x>W+20){projectiles.splice(i,1);continue;}
+    for(let j=monsters.length-1;j>=0;j--){
+      const m=monsters[j]; if(!m.alive) continue;
+      const monY=m.y+(m.floatY||0);
+      if(pr.x+pr.w>m.x&&pr.x<m.x+m.w&&pr.y<monY+m.h&&pr.y+pr.h>monY){
+        m.alive=false;projectiles.splice(i,1);
+        spawnParticles(m.x+m.w/2,monY,'#42a5f5',12);screenShake=5;stopMonsterSound();score+=50;hud.textContent=Math.floor(score);break;
+      }
+    }
+  }
+  if(shooting){shootTimer+=t;if(shootTimer>12)shooting=false;}
+
+  // Monsters
+  for(let i=monsters.length-1;i>=0;i--){
+    const m=monsters[i]; m.floatT+=0.04*t; m.floatY=Math.sin(m.floatT)*8;
+    const monY=m.y+(m.floatY||0);
+    if(m.y>H+20){monsters.splice(i,1);stopMonsterSound();continue;}
+    if(!m.alive) continue;
+    const isNear=monY>-300&&monY<H;
+    if(isNear) playMonsterSound(); else stopMonsterSound();
+    if(player.vy>0){
+      const feet=player.y+player.h;
+      const onX=player.x+player.w-8>m.x&&player.x+8<m.x+m.w;
+      const onY=feet>=monY&&feet<=monY+m.h/2+player.vy*t+5;
+      if(onX&&onY){m.alive=false;player.vy=SUPER_JUMP;player.squash=1.3;spawnParticles(m.x+m.w/2,m.y,'#42a5f5',15);screenShake=8;stopMonsterSound();playJump();}
+    }
+    if(m.alive&&!stunned){
+      const overlap=player.x+player.w-5>m.x&&player.x+5<m.x+m.w&&player.y+player.h>monY+m.h/3&&player.y<monY+m.h;
+      if(overlap){stunned=true;stunnedTime=0;player.vy=-2;stopMonsterSound();playTrapSound();}
+    }
+  }
+
+  // Holes
+  for(let i=holes.length-1;i>=0;i--){
+    const h=holes[i]; if(h.y>H+60){holes.splice(i,1);continue;}
+    if(!stunned&&!suckedIn){
+      const dx=player.x+player.w/2-(h.x+h.w/2),dy=player.y+player.h/2-(h.y+h.h/2);
+      if(Math.sqrt(dx*dx+dy*dy)<(h.w/2+player.w/4)){
+        suckedIn=true;suckedInTime=0;suckedInHole=h;player.vx=0;player.vy=0;stopMonsterSound();playHoleSound();
+      }
+    }
+  }
+
+  // New platforms (seeded)
+  for(let i=platforms.length-1;i>=0;i--) if(platforms[i].y>H+60) platforms.splice(i,1);
+  while(platforms.length < PLAT_COUNT) {
+    let highY=Infinity; for(const p of platforms) if(p.y<highY) highY=p.y;
+    if(!isFinite(highY)) highY=player.y-50;
+    const ny=highY-sRandI(GAP_MIN,GAP_MAX);
+    const nx=sRandI(10,W-PLAT_W_MAX-10);
+    let type=PT.NORMAL;
+    const diff=Math.min(score/3000,1);
+    const r=sRand();
+    if(r<.05+diff*.05) type=PT.SPRING;
+    else if(r<.15+diff*.12) type=PT.FRAGILE;
+    else if(r<.30+diff*.08) type=PT.MOVING;
+    platforms.push(makePlatSeeded(nx,ny,type));
+  }
+
+  // Particles
+  for(let i=particles.length-1;i>=0;i--){
+    const p=particles[i];p.x+=p.vx*t;p.y+=p.vy*t;p.vy+=0.15*t;p.life-=p.decay*t;
+    if(p.life<=0) particles.splice(i,1);
+  }
+  if(screenShake>0) screenShake*=0.85;
+
+  // Death by falling
+  if(player.y>H+80) { playDeathSound(); onDeath(); }
+}
+
+function spawnParticles(x,y,color,count=6){for(let i=0;i<count;i++)particles.push({x,y,vx:rand(-3,3),vy:rand(-4,-1),life:1,decay:rand(.02,.05),size:rand(2,5),color});}
+
+function onDeath() {
+  dead = true; running = false; myDead = true;
+  sendData({ type:'dead', score: Math.floor(score) });
+  // If opponent already dead, show results immediately
+  if(opponentDead) showResults();
+  // Otherwise wait for opponent to die or show "waiting for opponent"
+  else {
+    // Keep rendering so player sees the frozen state
+  }
+}
+
+// ══════════════════════════════════════════
+// RENDER
+// ══════════════════════════════════════════
+function render() {
+  ctx.save();
+  if(screenShake>0.5) ctx.translate(rand(-screenShake,screenShake),rand(-screenShake,screenShake));
+
+  if(bgPattern){ctx.save();ctx.translate(0,(cameraY*0.05)%200);ctx.fillStyle=bgPattern;ctx.fillRect(-200,-200,W+400,H+400);ctx.restore();}
+  else{ctx.fillStyle='#f5f0e8';ctx.fillRect(0,0,W,H);}
+
+  const grd=ctx.createLinearGradient(0,0,0,H);
+  grd.addColorStop(0,'rgba(200,230,255,.12)');grd.addColorStop(1,'rgba(255,245,220,.08)');
+  ctx.fillStyle=grd;ctx.fillRect(0,0,W,H);
+
+  // Platforms
+  for(const p of platforms){
+    if(p.broken&&p.breakAnim>1) continue;
+    ctx.globalAlpha=p.broken?Math.max(0,1-p.breakAnim):1;
+    if(p.type===PT.NORMAL&&greenPlatImg.complete&&greenPlatImg.naturalWidth) ctx.drawImage(greenPlatImg,p.x,p.y,p.w,p.h);
+    else if(p.type===PT.MOVING&&bluePlatImg.complete&&bluePlatImg.naturalWidth) ctx.drawImage(bluePlatImg,p.x,p.y,p.w,p.h);
+    else{const c=PT_COLORS[p.type];ctx.fillStyle='rgba(0,0,0,.08)';roundRect(ctx,p.x+2,p.y+3,p.w,p.h,7);ctx.fill();ctx.fillStyle=c.body;roundRect(ctx,p.x,p.y,p.w,p.h,7);ctx.fill();ctx.fillStyle=c.top;roundRect(ctx,p.x,p.y,p.w,p.h*0.6,7);ctx.fill();ctx.fillStyle=c.shine;ctx.fillRect(p.x+6,p.y+2,p.w-12,2);}
+    if(p.type===PT.SPRING){const sy=p.springAnim>0?-8*p.springAnim:0;ctx.fillStyle='#ff5722';ctx.fillRect(p.x+p.w/2-5,p.y-8+sy,10,8);ctx.fillStyle='#ff8a65';ctx.fillRect(p.x+p.w/2-3,p.y-7+sy,6,3);}
+    if(p.hasTrampoline&&trampolineImg.complete&&trampolineImg.naturalWidth){ctx.drawImage(trampolineImg,p.x+p.w/2-16,p.y-16,32,16);}
+    ctx.globalAlpha=1;
+  }
+
+  // Particles
+  for(const p of particles){ctx.globalAlpha=p.life;ctx.fillStyle=p.color;ctx.beginPath();ctx.arc(p.x,p.y,p.size,0,Math.PI*2);ctx.fill();}
+  ctx.globalAlpha=1;
+
+  // Projectiles
+  ctx.fillStyle='#ff5722';
+  for(const pr of projectiles){ctx.beginPath();ctx.ellipse(pr.x+pr.w/2,pr.y+pr.h/2,pr.w/2,pr.h/2,0,0,Math.PI*2);ctx.fill();}
+
+  // Holes
+  for(const h of holes){if(holeImg.complete&&holeImg.naturalWidth)ctx.drawImage(holeImg,h.x,h.y,h.w,h.h);else{ctx.fillStyle='#111';ctx.beginPath();ctx.ellipse(h.x+h.w/2,h.y+h.h/2,h.w/2,h.h/2,0,0,Math.PI*2);ctx.fill();}}
+
+  // Monsters
+  for(const m of monsters){if(!m.alive)continue;const my=m.y+(m.floatY||0);if(monsterImg.complete&&monsterImg.naturalWidth)ctx.drawImage(monsterImg,m.x,my,m.w,m.h);else{ctx.fillStyle='#42a5f5';ctx.fillRect(m.x,my,m.w,m.h);}}
+
+  // Opponent ghost (semi-transparent, camera-relative)
+  if(matchActive && opponentData && !opponentData.dead) {
+    const ox = opponentData.x;
+    // Convert opponent's screen Y to our screen Y using cameraY difference
+    const cameraDiff = opponentData.cameraY - cameraY;
+    const drawY = opponentData.y - cameraDiff;
+    const drawX = ox;
+    const ocx = drawX + PLAYER_W/2;
+    const ocy = drawY + PLAYER_H/2;
+
+    // Check if opponent is on screen
+    const onScreen = drawY > -PLAYER_H && drawY < H + PLAYER_H;
+
+    if(onScreen && playerImg.complete && playerImg.naturalWidth) {
+      // Draw opponent ghost
+      ctx.save();
+      ctx.globalAlpha = 0.4;
+      ctx.save();
+      ctx.translate(ocx, ocy);
+      if(opponentData.backflipping) ctx.rotate(-opponentData.backflipAngle);
+      ctx.scale((opponentData.facing||1) * (2-(opponentData.squash||1)), opponentData.squash||1);
+      if(opponentData.shooting && shootImg.complete && shootImg.naturalWidth) {
+        const ratio = shootImg.naturalWidth/shootImg.naturalHeight;
+        ctx.drawImage(shootImg, -PLAYER_H*ratio/2, -PLAYER_H/2, PLAYER_H*ratio, PLAYER_H);
+      } else {
+        ctx.drawImage(playerImg, -PLAYER_W/2, -PLAYER_H/2, PLAYER_W, PLAYER_H);
+      }
+      ctx.restore();
+      // Opponent pseudo
+      ctx.globalAlpha = 0.6;
+      ctx.fillStyle = '#42a5f5';
+      ctx.font = 'bold 11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(opPseudo, ocx, drawY - 8);
+      ctx.restore();
+    } else {
+      // Draw arrow indicator
+      ctx.save();
+      ctx.globalAlpha = 0.8;
+      const arrowX = Math.max(20, Math.min(W - 20, ocx));
+      if(drawY <= -PLAYER_H) {
+        // Opponent is ABOVE us (higher score) — arrow at top
+        const arrowY = 36;
+        ctx.fillStyle = '#42a5f5';
+        ctx.beginPath();
+        ctx.moveTo(arrowX, arrowY - 12);
+        ctx.lineTo(arrowX - 10, arrowY + 4);
+        ctx.lineTo(arrowX + 10, arrowY + 4);
+        ctx.closePath();
+        ctx.fill();
+        // Pseudo near arrow
+        ctx.fillStyle = '#42a5f5';
+        ctx.font = 'bold 10px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(opPseudo, arrowX, arrowY + 18);
+      } else {
+        // Opponent is BELOW us (lower score) — arrow at bottom
+        const arrowY = H - 20;
+        ctx.fillStyle = '#42a5f5';
+        ctx.beginPath();
+        ctx.moveTo(arrowX, arrowY + 12);
+        ctx.lineTo(arrowX - 10, arrowY - 4);
+        ctx.lineTo(arrowX + 10, arrowY - 4);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = '#42a5f5';
+        ctx.font = 'bold 10px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(opPseudo, arrowX, arrowY - 10);
+      }
+      ctx.restore();
+    }
+  }
+
+  // Local player
+  if(playerImg.complete&&playerImg.naturalWidth){
+    ctx.save();
+    const cx=player.x+player.w/2, cy2=player.y+player.h/2;
+    ctx.translate(cx,cy2);
+    if(backflipping) ctx.rotate(-backflipAngle);
+    ctx.scale(player.facing*(2-player.squash),player.squash);
+    const isShoot=shooting&&shootImg.complete&&shootImg.naturalWidth;
+    if(isShoot){const ratio=shootImg.naturalWidth/shootImg.naturalHeight;const dH=player.h;const dW=dH*ratio;ctx.drawImage(shootImg,-dW/2,-dH/2,dW,dH);}
+    else ctx.drawImage(playerImg,-player.w/2,-player.h/2,player.w,player.h);
+    ctx.restore();
+    // My pseudo above head
+    ctx.fillStyle = '#4caf50';
+    ctx.font = 'bold 11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(myPseudo, cx, player.y - 8);
+  } else {ctx.fillStyle='#4caf50';roundRect(ctx,player.x,player.y,player.w,player.h,10);ctx.fill();}
+
+  // Stars when stunned
+  if(stunned){
+    const starCx=player.x+player.w/2,starCy=player.y-10;
+    ctx.save();
+    for(let i=0;i<4;i++){const angle=stunnedTime*4+(Math.PI*2/4)*i;const sx=starCx+Math.cos(angle)*18,sy=starCy+Math.sin(angle)*9;ctx.save();ctx.translate(sx,sy);ctx.rotate(stunnedTime*6+i);ctx.fillStyle=i%2===0?'#FFD700':'#FFA500';ctx.beginPath();for(let j=0;j<8;j++){const r=j%2===0?5:2;const a=(Math.PI/4)*j-Math.PI/2;if(j===0)ctx.moveTo(Math.cos(a)*r,Math.sin(a)*r);else ctx.lineTo(Math.cos(a)*r,Math.sin(a)*r);}ctx.closePath();ctx.fill();ctx.restore();}
+    ctx.restore();
+  }
+
+  ctx.restore();
+}
+
+function roundRect(ctx,x,y,w,h,r){r=Math.min(r,w/2,h/2);ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
+
+// ══════════════════════════════════════════
+// GAME LOOP
+// ══════════════════════════════════════════
+function loop(ts) {
+  if(!running && !dead) return;
+  if(!lastTs) lastTs = ts;
+  const dt = Math.min(ts - lastTs, 33.33);
+  lastTs = ts;
+  if(running) update(dt);
+  render();
+  // Send position data to opponent
+  if(matchActive && conn && conn.open) {
+    sendData({
+      type:'pos',
+      x: player.x, y: player.y,
+      facing: player.facing, squash: player.squash,
+      score: Math.floor(score), cameraY: cameraY,
+      shooting, backflipping, backflipAngle
+    });
+  }
+  // Update HUD with opponent score
+  if(matchActive) hudRight.textContent = opPseudo + ': ' + Math.floor(opponentData.score);
+  requestAnimationFrame(loop);
+}
+
+// ══════════════════════════════════════════
+// NETWORKING (PeerJS)
+// ══════════════════════════════════════════
+const LOBBY_PREFIX = 'doodlejump-mp-lobby-';
+
+function sendData(data) {
+  if(conn && conn.open) { try { conn.send(data); } catch(e){} }
+}
+
+function onData(data) {
+  if(data.type === 'pos') {
+    opponentData.x = data.x;
+    opponentData.y = data.y;
+    opponentData.facing = data.facing;
+    opponentData.squash = data.squash;
+    opponentData.score = data.score;
+    opponentData.cameraY = data.cameraY;
+    opponentData.shooting = data.shooting;
+    opponentData.backflipping = data.backflipping;
+    opponentData.backflipAngle = data.backflipAngle;
+  }
+  else if(data.type === 'dead') {
+    opponentDead = true;
+    opponentData.dead = true;
+    opponentData.score = data.score;
+    if(myDead) showResults();
+  }
+  else if(data.type === 'pseudo') {
+    opPseudo = data.pseudo;
+  }
+  else if(data.type === 'seed') {
+    gameSeed = data.seed;
+    startCountdown();
+  }
+  else if(data.type === 'restart') {
+    // Opponent wants rematch
+    gameSeed = data.seed;
+    startCountdown();
+  }
+}
+
+function showScreen(id) {
+  ['lobbyScreen','waitingScreen','getReadyScreen','goScreen','resultScreen'].forEach(s => {
+    document.getElementById(s).classList.add('hidden');
+  });
+  if(id) document.getElementById(id).classList.remove('hidden');
+}
+
+function startSearch() {
+  initAudio();
+  myPseudo = document.getElementById('pseudoInput').value.trim() || 'Joueur';
+  document.getElementById('lobbyStatus').textContent = 'Connexion...';
+
+  // Create peer with random ID
+  const myId = LOBBY_PREFIX + Math.random().toString(36).substr(2, 8);
+  peer = new Peer(myId);
+
+  peer.on('open', () => {
+    document.getElementById('lobbyStatus').textContent = 'Recherche d\'un adversaire...';
+    showScreen('waitingScreen');
+
+    // Try to connect to existing lobbies by polling random IDs
+    // Also listen for incoming connections
+    peer.on('connection', (c) => {
+      if(conn) return; // already connected
+      conn = c;
+      isHost = true;
+      setupConnection();
+    });
+
+    // Broadcast availability by listing on lobby channel
+    // We use a simple approach: try connecting to a shared known room
+    tryFindOpponent();
+  });
+
+  peer.on('error', (err) => {
+    console.warn('Peer error:', err);
+    if(err.type === 'peer-unavailable') return; // normal when probing
+    document.getElementById('lobbyStatus').textContent = 'Erreur: ' + err.type;
+  });
+}
+
+// Simple matchmaking: use a known lobby peer ID pattern
+// Host creates a "room" peer, joiner connects to it
+let searchInterval = null;
+let roomPeer = null;
+
+function tryFindOpponent() {
+  // Strategy: Try to connect to a shared room name. If it exists, we're the joiner.
+  // If it doesn't exist (timeout), we become the room host.
+  const roomId = LOBBY_PREFIX + 'room';
+
+  // Try to join an existing room
+  const testConn = peer.connect(roomId, { reliable: true });
+
+  let connected = false;
+  testConn.on('open', () => {
+    connected = true;
+    conn = testConn;
+    isHost = false;
+    setupConnection();
+  });
+
+  // If connection fails after 3s, become the room host
+  setTimeout(() => {
+    if(connected) return;
+    try { testConn.close(); } catch(e){}
+    // Destroy current peer and become the room
+    peer.destroy();
+    roomPeer = new Peer(roomId);
+    roomPeer.on('open', () => {
+      // We are the room host, wait for joiner
+    });
+    roomPeer.on('connection', (c) => {
+      conn = c;
+      isHost = true;
+      peer = roomPeer; // use room peer
+      setupConnection();
+    });
+    roomPeer.on('error', (err) => {
+      // Room ID might be taken (stale), retry with delay
+      if(err.type === 'unavailable-id') {
+        setTimeout(() => {
+          roomPeer.destroy();
+          // Recreate our own peer and retry
+          peer = new Peer(LOBBY_PREFIX + Math.random().toString(36).substr(2, 8));
+          peer.on('open', () => {
+            peer.on('connection', (c) => {
+              if(conn) return;
+              conn = c;
+              isHost = true;
+              setupConnection();
+            });
+            setTimeout(tryFindOpponent, 2000);
+          });
+        }, 1000);
+      }
+    });
+  }, 3000);
+}
+
+function setupConnection() {
+  conn.on('data', onData);
+  conn.on('close', () => {
+    if(matchActive && !myDead) {
+      opponentDead = true;
+      opponentData.dead = true;
+      if(myDead) showResults();
+      else { /* opponent disconnected, you win when you die or show result now */ showResults(); }
+    }
+  });
+
+  // Exchange pseudos
+  sendData({ type: 'pseudo', pseudo: myPseudo });
+
+  // Host generates seed and starts countdown
+  if(isHost) {
+    gameSeed = Date.now();
+    sendData({ type: 'seed', seed: gameSeed });
+    startCountdown();
+  }
+  // Joiner waits for seed via onData
+}
+
+async function startCountdown() {
+  showScreen('getReadyScreen');
+  await sleep(5000);
+  showScreen('goScreen');
+  await sleep(1500);
+  showScreen(null);
+  startMatch();
+}
+
+function startMatch() {
+  seedRandom(gameSeed);
+  matchActive = true;
+  opponentDead = false;
+  myDead = false;
+  opponentData = { x:W/2, y:H-140, w:PLAYER_W, h:PLAYER_H, facing:1, squash:1, score:0, cameraY:0, dead:false, shooting:false, backflipping:false, backflipAngle:0 };
+  init();
+  running = true;
+  dead = false;
+  lastTs = 0;
+  hud.textContent = '0';
+  hudRight.textContent = '';
+  requestAnimationFrame(loop);
+}
+
+function showResults() {
+  running = false;
+  matchActive = false;
+  const myScore = Math.floor(score);
+  const opScore = Math.floor(opponentData.score);
+  const won = myScore >= opScore;
+
+  const titleEl = document.getElementById('resultTitle');
+  titleEl.textContent = won ? 'Vous gagnez !' : 'Vous avez perdu !';
+  titleEl.className = 'result-title ' + (won ? 'win' : 'lose');
+
+  document.getElementById('resultMyName').textContent = myPseudo;
+  document.getElementById('resultMyScore').textContent = myScore;
+  document.getElementById('resultOpName').textContent = opPseudo;
+  document.getElementById('resultOpScore').textContent = opScore;
+
+  showScreen('resultScreen');
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ══════════════════════════════════════════
+// INPUT
+// ══════════════════════════════════════════
+window.addEventListener('keydown', e => {
+  if(e.key==='ArrowLeft'||e.key==='a'||e.key==='A'){keys.l=true;e.preventDefault();}
+  if(e.key==='ArrowRight'||e.key==='d'||e.key==='D'){keys.r=true;e.preventDefault();}
+});
+window.addEventListener('keyup', e => {
+  if(e.key==='ArrowLeft'||e.key==='a'||e.key==='A') keys.l=false;
+  if(e.key==='ArrowRight'||e.key==='d'||e.key==='D') keys.r=false;
+});
+
+canvas.addEventListener('mousedown', e => {
+  if(!running||stunned||suckedIn||dead) return;
+  const rect=canvas.getBoundingClientRect();
+  const mx=(e.clientX-rect.left)*(W/rect.width);
+  const my=(e.clientY-rect.top)*(H/rect.height);
+  fireProjectile(mx,my);
+});
+
+function fireProjectile(targetX,targetY) {
+  const startX=player.x+player.w/2, startY=player.y;
+  let dx=targetX-startX, dy=targetY-startY;
+  const len=Math.sqrt(dx*dx+dy*dy);
+  if(len<1){dx=0;dy=-1;}else{dx/=len;dy/=len;}
+  if(dy>-0.15) dy=-0.15;
+  const len2=Math.sqrt(dx*dx+dy*dy);dx/=len2;dy/=len2;
+  projectiles.push({x:startX-3,y:startY-4,w:6,h:10,vx:dx*14,vy:dy*14});
+  shooting=true;shootTimer=0;
+  if(dx<-0.1)player.facing=-1;else if(dx>0.1)player.facing=1;
+  playShootSound();
+}
+
+// ══════════════════════════════════════════
+// BUTTONS
+// ══════════════════════════════════════════
+document.getElementById('btnSearch').addEventListener('click', startSearch);
+document.getElementById('btnPlayAgain').addEventListener('click', () => {
+  if(conn && conn.open) {
+    gameSeed = Date.now();
+    sendData({ type:'restart', seed: gameSeed });
+    startCountdown();
+  } else {
+    showScreen('lobbyScreen');
+  }
+});
+document.getElementById('btnBackMenu').addEventListener('click', () => {
+  if(conn) try{conn.close();}catch(e){}
+  if(peer) try{peer.destroy();}catch(e){}
+  location.href = 'index.html';
+});
+
+window.focus();
+</script>
+</body>
+</html>
